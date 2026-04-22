@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>성경 암송 Pro v3.3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="./data.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700;900&display=swap');
+        body { font-family: 'Pretendard', sans-serif; }
+        .modal-overlay { background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const BibleApp = () => {
+            const [data, setData] = useState(() => {
+                const savedState = localStorage.getItem('bible_memory_state');
+                if (savedState) return JSON.parse(savedState);
+                return initialBibleData.map(cat => ({
+                    ...cat,
+                    verses: cat.verses.map(v => ({ ...v, status: 'none' }))
+                }));
+            });
+
+            const [currentIdx, setCurrentIdx] = useState(() => Number(localStorage.getItem('last_category_idx')) || 0);
+            const [view, setView] = useState('main'); 
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [testMode, setTestMode] = useState('text');
+            const [revealMap, setRevealMap] = useState({});
+
+            useEffect(() => {
+                localStorage.setItem('bible_memory_state', JSON.stringify(data));
+                localStorage.setItem('last_category_idx', currentIdx);
+            }, [data, currentIdx]);
+
+            const handleStatusChange = (vId, status) => {
+                const newData = [...data];
+                const verse = newData[currentIdx].verses.find(v => v.id === vId);
+                verse.status = status;
+                setData(newData);
+            };
+
+            const progress = useMemo(() => {
+                if (!data[currentIdx] || data[currentIdx].verses.length === 0) return 0;
+                const verses = data[currentIdx].verses;
+                const done = verses.filter(v => v.status === 'done').length;
+                return Math.round((done / verses.length) * 100);
+            }, [data, currentIdx]);
+
+            // --- 설정 페이지 전용 함수들 ---
+            const resetAllRecords = () => {
+                if(confirm("모든 암송 기록을 초기화할까? (복구 불가)")) {
+                    setData(data.map(c => ({...c, verses: c.verses.map(v => ({...v, status: 'none'}))})));
+                    alert("초기화 완료!");
+                }
+            };
+
+            const addCategory = () => {
+                const title = prompt("새로운 주제 이름을 입력해:");
+                if (title) setData([...data, { category: title, verses: [] }]);
+            };
+
+            const editCategory = (idx) => {
+                const newTitle = prompt("수정할 주제 이름을 입력해:", data[idx].category);
+                if (newTitle) {
+                    const newData = [...data];
+                    newData[idx].category = newTitle;
+                    setData(newData);
+                }
+            };
+
+            const deleteCategory = (idx) => {
+                if (confirm(`'${data[idx].category}' 주제와 포함된 모든 말씀을 삭제할까?`)) {
+                    setData(data.filter((_, i) => i !== idx));
+                    if (currentIdx >= data.length - 1) setCurrentIdx(0);
+                }
+            };
+
+            const addVerse = (catIdx) => {
+                const ref = prompt("장절을 입력해 (예: 요 3:16):");
+                if (!ref) return;
+                const text = prompt("말씀 내용을 입력해:");
+                if (!text) return;
+                
+                const newData = [...data];
+                newData[catIdx].verses.push({ id: `v_${Date.now()}`, ref, text, status: 'none' });
+                setData(newData);
+            };
+
+            const editVerse = (catIdx, verseId) => {
+                const newData = [...data];
+                const verse = newData[catIdx].verses.find(v => v.id === verseId);
+                const ref = prompt("장절 수정:", verse.ref);
+                if (!ref) return;
+                const text = prompt("말씀 내용 수정:", verse.text);
+                if (!text) return;
+                
+                verse.ref = ref;
+                verse.text = text;
+                setData(newData);
+            };
+
+            const deleteVerse = (catIdx, verseId) => {
+                if (confirm("이 말씀을 삭제할까?")) {
+                    const newData = [...data];
+                    newData[catIdx].verses = newData[catIdx].verses.filter(v => v.id !== verseId);
+                    setData(newData);
+                }
+            };
+
+            // --- 뷰 컴포넌트 ---
+            const TestModal = () => (
+                <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
+                    <div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl">
+                        <h3 className="text-lg font-bold mb-4 text-center">테스트 방식 선택</h3>
+                        <div className="space-y-3">
+                            <button onClick={() => { setTestMode('text'); setView('test'); setIsModalOpen(false); }}
+                                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold">말씀 암송</button>
+                            <button onClick={() => { setTestMode('ref'); setView('test'); setIsModalOpen(false); }}
+                                className="w-full py-3 bg-gray-100 text-gray-800 rounded-xl font-bold border">장절 맞추기</button>
+                            <button onClick={() => setIsModalOpen(false)} className="w-full py-2 text-gray-400 text-sm">취소</button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (view === 'settings') return (
+                <div className="max-w-md mx-auto min-h-screen bg-gray-50 p-5 pb-24">
+                    <header className="flex justify-between items-center mb-8">
+                        <button onClick={() => setView('main')} className="text-gray-400 font-bold">← 돌아가기</button>
+                        <h2 className="text-2xl font-black">SETTINGS</h2>
+                    </header>
+
+                    <button onClick={resetAllRecords} className="w-full py-4 bg-red-100 text-red-600 rounded-2xl font-bold mb-8 shadow-sm">
+                        🔥 모든 암송 기록 리셋
+                    </button>
+
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="font-bold text-lg text-gray-800">주제 및 구절 관리</h3>
+                        <button onClick={addCategory} className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-lg">+ 새 주제</button>
+                    </div>
+
+                    <div className="space-y-4">
+                        {data.map((cat, cIdx) => (
+                            <div key={cIdx} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                                <div className="flex justify-between items-center mb-3 pb-3 border-b border-gray-50">
+                                    <h4 className="font-bold text-blue-600">{cat.category}</h4>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => editCategory(cIdx)} className="px-2 py-1 bg-gray-100 text-gray-500 text-[10px] rounded">수정</button>
+                                        <button onClick={() => deleteCategory(cIdx)} className="px-2 py-1 bg-red-50 text-red-500 text-[10px] rounded">삭제</button>
+                                    </div>
+                                </div>
+                                
+                                <div className="space-y-3 mb-3">
+                                    {cat.verses.map(v => (
+                                        <div key={v.id} className="flex justify-between items-start group border-b border-gray-50 pb-2">
+                                            <div className="pr-4">
+                                                <p className="text-xs font-bold text-gray-700">{v.ref}</p>
+                                                <p className="text-xs text-gray-500 line-clamp-1">"{v.text}"</p>
+                                            </div>
+                                            <div className="flex gap-1 shrink-0 pt-1">
+                                                <button onClick={() => editVerse(cIdx, v.id)} className="text-[10px] text-gray-400 underline">수정</button>
+                                                <button onClick={() => deleteVerse(cIdx, v.id)} className="text-[10px] text-red-400 underline">삭제</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button onClick={() => addVerse(cIdx)} className="w-full py-2 bg-gray-50 text-gray-500 text-xs font-bold rounded-xl border border-dashed border-gray-300">
+                                    + 말씀 추가
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            if (view === 'test') return (
+                <div className="max-w-md mx-auto min-h-screen bg-white p-5 pb-24">
+                    <button onClick={() => { setView('main'); setRevealMap({}); }} className="mb-6 text-gray-400 font-medium">← 학습으로 돌아가기</button>
+                    <header className="mb-8">
+                        <span className="text-xs font-bold text-blue-500 uppercase tracking-widest">{testMode === 'text' ? 'Word Memory' : 'Reference Match'}</span>
+                        <h2 className="text-2xl font-black">[{data[currentIdx]?.category}]</h2>
+                    </header>
+                    
+                    {data[currentIdx]?.verses.map(v => (
+                        <div key={v.id} className="mb-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                            <div className="p-6 bg-gray-50 rounded-2xl mb-4 border border-gray-100">
+                                {testMode === 'text' ? (
+                                    <div className="text-center">
+                                        <p className="text-blue-600 font-bold text-xl mb-4">{v.ref}</p>
+                                        
+                                        {/* 미리보기 힌트: 정답이 가려져 있을 때만 첫 두 단어를 보여줌 */}
+                                        {!revealMap[v.id] && (
+                                            <p className="text-gray-400 font-medium text-lg mb-2">
+                                                {v.text.split(' ').slice(0, 2).join(' ')} <span className="opacity-40 tracking-widest">...</span>
+                                            </p>
+                                        )}
+
+                                        <div className={`transition-all duration-300 ${revealMap[v.id] ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+                                            <p className="text-gray-800 leading-relaxed text-lg italic">"{v.text}"</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-center">
+                                        <p className="text-gray-800 leading-relaxed text-lg mb-4">"{v.text}"</p>
+                                        <div className={`transition-all duration-300 ${revealMap[v.id] ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+                                            <p className="text-blue-600 font-bold text-xl">{v.ref}</p>
+                                        </div>
+                                    </div>
+                                )}
+                                <button onClick={() => setRevealMap(prev => ({...prev, [v.id]: !prev[v.id]}))}
+                                    className="mt-4 w-full text-xs text-gray-400 underline decoration-dotted">
+                                    {revealMap[v.id] ? '숨기기' : '정답 확인'}
+                                </button>
+                            </div>
+                            <div className="flex gap-2">
+                                {['done', 'partial', 'none'].map(s => (
+                                    <button key={s} onClick={() => handleStatusChange(v.id, s)}
+                                        className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${v.status === s ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-gray-100 text-gray-400'}`}>
+                                        {s === 'done' ? '완성' : s === 'partial' ? '불완전' : '모름'}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+
+            return (
+                <div className="max-w-md mx-auto p-5 pb-24">
+                    {isModalOpen && <TestModal />}
+                    
+                    <header className="flex justify-between items-center mb-8">
+                        <h1 className="text-3xl font-black tracking-tighter italic">BIBLE.</h1>
+                        <button onClick={() => setView('settings')} className="text-2xl opacity-50 hover:opacity-100 transition-opacity">⚙️</button>
+                    </header>
+
+                    {data.length > 0 ? (
+                        <>
+                            <div className="mb-8">
+                                <p className="text-xs font-bold text-gray-400 mb-2 ml-1">SELECT CATEGORY</p>
+                                <select 
+                                    value={currentIdx}
+                                    onChange={(e) => setCurrentIdx(Number(e.target.value))}
+                                    className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl font-bold text-gray-700 shadow-sm focus:border-blue-500 outline-none transition-all"
+                                >
+                                    {data.map((cat, i) => (
+                                        <option key={i} value={i}>{cat.category}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="mb-10 bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+                                <div className="flex justify-between items-end mb-3">
+                                    <span className="font-black text-2xl text-blue-600">{progress}%</span>
+                                    <span className="text-xs font-bold text-gray-400">MEMORIZED</span>
+                                </div>
+                                <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden">
+                                    <div className="bg-blue-500 h-full transition-all duration-1000 ease-out" style={{width: `${progress}%`}}></div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                {data[currentIdx]?.verses.map(v => (
+                                    <div key={v.id} className="p-5 bg-white rounded-2xl border border-gray-100 shadow-sm transition-transform active:scale-[0.98]">
+                                        <div className="flex justify-between items-start mb-3">
+                                            <span className="text-sm font-black text-blue-500">{v.ref}</span>
+                                            <div className={`w-2 h-2 rounded-full ${v.status === 'done' ? 'bg-green-400' : v.status === 'partial' ? 'bg-yellow-400' : 'bg-red-400'}`}></div>
+                                        </div>
+                                        <p className="text-gray-700 leading-relaxed font-medium">"{v.text}"</p>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md px-5">
+                                <button 
+                                    onClick={() => setIsModalOpen(true)}
+                                    className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black transition-all"
+                                >
+                                    TEST NOW
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="text-center py-20 text-gray-400">
+                            <p>주제가 하나도 없어.</p>
+                            <p className="text-sm mt-2">설정에서 새 주제와 말씀을 추가해봐!</p>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<BibleApp />);
+    </script>
+</body>
+</html>
