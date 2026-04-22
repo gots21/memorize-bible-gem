@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>성경 암송 Pro v3.3</title>
+    <title>성경 암송 Pro v5.0 (Admin Approval UI)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -22,163 +22,414 @@
         const { useState, useEffect, useMemo } = React;
 
         const BibleApp = () => {
-            const [data, setData] = useState(() => {
-                const savedState = localStorage.getItem('bible_memory_state');
-                if (savedState) return JSON.parse(savedState);
-                return initialBibleData.map(cat => ({
-                    ...cat,
-                    verses: cat.verses.map(v => ({ ...v, status: 'none' }))
-                }));
+            // --- 데이터 상태 관리 ---
+            const [users, setUsers] = useState(() => {
+                const saved = localStorage.getItem('bible_users');
+                if (saved) {
+                    return JSON.parse(saved).map(u => ({
+                        ...u,
+                        name: u.name || u.id, // 기존 데이터 호환용
+                        status: u.status || 'active' 
+                    }));
+                }
+                return [{ id: 'gots21', name: '최고관리자', level: 'admin', status: 'active' }];
+            });
+
+            const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('bible_current_user') || null);
+
+            const [globalData, setGlobalData] = useState(() => {
+                const saved = localStorage.getItem('bible_global_data');
+                return saved ? JSON.parse(saved) : initialBibleData;
+            });
+
+            const [userRecords, setUserRecords] = useState(() => {
+                const saved = localStorage.getItem('bible_user_records');
+                return saved ? JSON.parse(saved) : {};
             });
 
             const [currentIdx, setCurrentIdx] = useState(() => Number(localStorage.getItem('last_category_idx')) || 0);
             const [view, setView] = useState('main'); 
-            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [isTestModalOpen, setIsTestModalOpen] = useState(false);
             const [testMode, setTestMode] = useState('text');
             const [revealMap, setRevealMap] = useState({});
+            
+            // 로그인 & 회원가입 상태
+            const [loginInput, setLoginInput] = useState('');
+            const [regModal, setRegModal] = useState(false);
+            const [regForm, setRegForm] = useState({ id: '', name: '' });
 
-            useEffect(() => {
-                localStorage.setItem('bible_memory_state', JSON.stringify(data));
-                localStorage.setItem('last_category_idx', currentIdx);
-            }, [data, currentIdx]);
+            // Admin 사용자 관리 모달 상태
+            const [adminUserModal, setAdminUserModal] = useState(null); // null or { isNew, id, name, level }
+
+            // --- 데이터 로컬스토리지 동기화 ---
+            useEffect(() => { localStorage.setItem('bible_users', JSON.stringify(users)); }, [users]);
+            useEffect(() => { 
+                if (currentUser) localStorage.setItem('bible_current_user', currentUser); 
+                else localStorage.removeItem('bible_current_user');
+            }, [currentUser]);
+            useEffect(() => { localStorage.setItem('bible_global_data', JSON.stringify(globalData)); }, [globalData]);
+            useEffect(() => { localStorage.setItem('bible_user_records', JSON.stringify(userRecords)); }, [userRecords]);
+            useEffect(() => { localStorage.setItem('last_category_idx', currentIdx); }, [currentIdx]);
+
+            const currentUserObj = useMemo(() => users.find(u => u.id === currentUser), [currentUser, users]);
+            const isAdmin = currentUserObj?.level === 'admin';
+
+            // --- 로그인 & 회원가입 로직 ---
+            const handleLogin = () => {
+                const id = loginInput.trim().toLowerCase();
+                if (!id) return;
+
+                const existingUser = users.find(u => u.id === id);
+                if (!existingUser) {
+                    alert("등록되지 않은 아이디야. 계정 생성을 눌러줘.");
+                    return;
+                }
+                if (existingUser.status === 'pending') {
+                    alert("관리자의 승인을 기다리는 중이야. 조금만 기다려 줘!");
+                    return;
+                }
+
+                setCurrentUser(id);
+            };
+
+            const submitRegistration = () => {
+                const id = regForm.id.trim().toLowerCase();
+                const name = regForm.name.trim();
+
+                if (!/^[a-z0-9]{1,10}$/.test(id)) return alert("ID는 영소문자/숫자 10자 이내여야 해.");
+                if (!name) return alert("이름을 입력해줘.");
+                if (users.find(u => u.id === id)) return alert("이미 존재하는 ID야.");
+
+                setUsers([...users, { id, name, level: 'user', status: 'pending' }]);
+                alert("신청 완료! 관리자 승인 후 로그인할 수 있어.");
+                setRegModal(false);
+                setRegForm({ id: '', name: '' });
+            };
+
+            const handleLogout = () => {
+                setCurrentUser(null);
+                setLoginInput('');
+                setView('main');
+            };
+
+            // --- 암송 상태 로직 ---
+            const getVerseStatus = (vId) => {
+                if (!currentUser || !userRecords[currentUser]) return 'none';
+                return userRecords[currentUser][vId] || 'none';
+            };
 
             const handleStatusChange = (vId, status) => {
-                const newData = [...data];
-                const verse = newData[currentIdx].verses.find(v => v.id === vId);
-                verse.status = status;
-                setData(newData);
+                const newRecords = { ...userRecords };
+                if (!newRecords[currentUser]) newRecords[currentUser] = {};
+                newRecords[currentUser][vId] = status;
+                setUserRecords(newRecords);
             };
 
             const progress = useMemo(() => {
-                if (!data[currentIdx] || data[currentIdx].verses.length === 0) return 0;
-                const verses = data[currentIdx].verses;
-                const done = verses.filter(v => v.status === 'done').length;
+                if (!globalData[currentIdx] || globalData[currentIdx].verses.length === 0) return 0;
+                const verses = globalData[currentIdx].verses;
+                const done = verses.filter(v => getVerseStatus(v.id) === 'done').length;
                 return Math.round((done / verses.length) * 100);
-            }, [data, currentIdx]);
+            }, [globalData, currentIdx, userRecords, currentUser]);
 
-            // --- 설정 페이지 전용 함수들 ---
-            const resetAllRecords = () => {
-                if(confirm("모든 암송 기록을 초기화할까? (복구 불가)")) {
-                    setData(data.map(c => ({...c, verses: c.verses.map(v => ({...v, status: 'none'}))})));
-                    alert("초기화 완료!");
+            // --- 관리자 & 설정 기능 ---
+            const resetMyRecord = () => {
+                if(confirm("내 암송 기록을 초기화할까? (복구 불가)")) {
+                    const newRecords = { ...userRecords };
+                    delete newRecords[currentUser];
+                    setUserRecords(newRecords);
+                    alert("내 기록 초기화 완료!");
                 }
             };
 
+            const resetAllRecords = () => {
+                if(confirm("경고: 모든 사용자의 암송 기록을 날려버릴까?")) {
+                    setUserRecords({});
+                    alert("전체 기록 초기화 완료!");
+                }
+            };
+
+            // Admin 사용자 관리
+            const approveUser = (id) => {
+                setUsers(users.map(u => u.id === id ? { ...u, status: 'active' } : u));
+            };
+
+            const saveAdminUserModal = () => {
+                const { isNew, id, name, level } = adminUserModal;
+                const cleanId = id.trim().toLowerCase();
+                const cleanName = name.trim();
+
+                if (!/^[a-z0-9]{1,10}$/.test(cleanId)) return alert("ID는 영소문자/숫자 10자 이내.");
+                if (!cleanName) return alert("이름을 입력해.");
+
+                if (isNew) {
+                    if (users.find(u => u.id === cleanId)) return alert("이미 존재하는 ID야.");
+                    setUsers([...users, { id: cleanId, name: cleanName, level, status: 'active' }]);
+                } else {
+                    if (cleanId === 'gots21' && level !== 'admin') return alert("창조주의 권한은 강등할 수 없어.");
+                    setUsers(users.map(u => u.id === cleanId ? { ...u, name: cleanName, level } : u));
+                }
+                setAdminUserModal(null);
+            };
+
+            const deleteUser = (targetId) => {
+                if(targetId === 'gots21') return alert("절대 권력자 'gots21'은 삭제 불가!");
+                if(targetId === currentUser) return alert("자기 자신은 삭제할 수 없어.");
+                if(confirm(`사용자 '${targetId}'를 삭제할까?`)) {
+                    setUsers(users.filter(u => u.id !== targetId));
+                    const newRecords = {...userRecords};
+                    delete newRecords[targetId];
+                    setUserRecords(newRecords);
+                }
+            };
+
+            // 글로벌 주제/구절 관리 (생략 없이 유지)
             const addCategory = () => {
                 const title = prompt("새로운 주제 이름을 입력해:");
-                if (title) setData([...data, { category: title, verses: [] }]);
+                if (title) setGlobalData([...globalData, { category: title, verses: [] }]);
             };
-
             const editCategory = (idx) => {
-                const newTitle = prompt("수정할 주제 이름을 입력해:", data[idx].category);
+                const newTitle = prompt("수정할 주제 이름을 입력해:", globalData[idx].category);
                 if (newTitle) {
-                    const newData = [...data];
+                    const newData = [...globalData];
                     newData[idx].category = newTitle;
-                    setData(newData);
+                    setGlobalData(newData);
                 }
             };
-
             const deleteCategory = (idx) => {
-                if (confirm(`'${data[idx].category}' 주제와 포함된 모든 말씀을 삭제할까?`)) {
-                    setData(data.filter((_, i) => i !== idx));
-                    if (currentIdx >= data.length - 1) setCurrentIdx(0);
+                if (confirm(`'${globalData[idx].category}' 주제를 삭제할까?`)) {
+                    setGlobalData(globalData.filter((_, i) => i !== idx));
+                    if (currentIdx >= globalData.length - 1) setCurrentIdx(0);
                 }
             };
-
             const addVerse = (catIdx) => {
-                const ref = prompt("장절을 입력해 (예: 요 3:16):");
-                if (!ref) return;
-                const text = prompt("말씀 내용을 입력해:");
-                if (!text) return;
-                
-                const newData = [...data];
-                newData[catIdx].verses.push({ id: `v_${Date.now()}`, ref, text, status: 'none' });
-                setData(newData);
+                const ref = prompt("장절 입력:"); if (!ref) return;
+                const text = prompt("말씀 입력:"); if (!text) return;
+                const newData = [...globalData];
+                newData[catIdx].verses.push({ id: `v_${Date.now()}`, ref, text });
+                setGlobalData(newData);
             };
-
             const editVerse = (catIdx, verseId) => {
-                const newData = [...data];
+                const newData = [...globalData];
                 const verse = newData[catIdx].verses.find(v => v.id === verseId);
-                const ref = prompt("장절 수정:", verse.ref);
-                if (!ref) return;
-                const text = prompt("말씀 내용 수정:", verse.text);
-                if (!text) return;
-                
-                verse.ref = ref;
-                verse.text = text;
-                setData(newData);
+                const ref = prompt("장절 수정:", verse.ref); if (!ref) return;
+                const text = prompt("말씀 내용 수정:", verse.text); if (!text) return;
+                verse.ref = ref; verse.text = text;
+                setGlobalData(newData);
             };
-
             const deleteVerse = (catIdx, verseId) => {
                 if (confirm("이 말씀을 삭제할까?")) {
-                    const newData = [...data];
+                    const newData = [...globalData];
                     newData[catIdx].verses = newData[catIdx].verses.filter(v => v.id !== verseId);
-                    setData(newData);
+                    setGlobalData(newData);
                 }
             };
 
-            // --- 뷰 컴포넌트 ---
-            const TestModal = () => (
-                <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
-                    <div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl">
-                        <h3 className="text-lg font-bold mb-4 text-center">테스트 방식 선택</h3>
-                        <div className="space-y-3">
-                            <button onClick={() => { setTestMode('text'); setView('test'); setIsModalOpen(false); }}
-                                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold">말씀 암송</button>
-                            <button onClick={() => { setTestMode('ref'); setView('test'); setIsModalOpen(false); }}
-                                className="w-full py-3 bg-gray-100 text-gray-800 rounded-xl font-bold border">장절 맞추기</button>
-                            <button onClick={() => setIsModalOpen(false)} className="w-full py-2 text-gray-400 text-sm">취소</button>
+            // --- 뷰 렌더링 ---
+            if (!currentUser) return (
+                <div className="max-w-md mx-auto min-h-screen flex flex-col items-center justify-center p-5 bg-gray-50 relative">
+                    <div className="w-full bg-white p-8 rounded-3xl shadow-lg border border-gray-100 text-center">
+                        <h1 className="text-4xl font-black italic tracking-tighter text-blue-600 mb-2">BIBLE.</h1>
+                        <p className="text-gray-400 font-bold mb-8">Memorize System</p>
+                        
+                        <div className="text-left mb-6">
+                            <label className="text-xs font-bold text-gray-500 ml-1">USER ID (소문자/숫자만)</label>
+                            <input 
+                                type="text" 
+                                value={loginInput}
+                                onChange={e => setLoginInput(e.target.value.toLowerCase())}
+                                placeholder="아이디 입력"
+                                maxLength={10}
+                                className="w-full mt-1 p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl font-bold focus:border-blue-500 outline-none"
+                            />
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={handleLogin} className="flex-1 py-4 bg-gray-900 text-white rounded-2xl font-bold">로그인</button>
+                            <button onClick={() => setRegModal(true)} className="flex-1 py-4 bg-blue-100 text-blue-700 rounded-2xl font-bold">계정 생성</button>
                         </div>
                     </div>
+
+                    {/* 회원가입 팝업 */}
+                    {regModal && (
+                        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                                <h3 className="text-xl font-black mb-6 text-center text-blue-600">계정 생성 신청</h3>
+                                
+                                <div className="space-y-4 mb-8">
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500 ml-1">희망 ID (영소문자/숫자 10자 이내)</label>
+                                        <input type="text" value={regForm.id} onChange={e => setRegForm({...regForm, id: e.target.value.toLowerCase()})} maxLength={10} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500 ml-1">이름 (표시용)</label>
+                                        <input type="text" value={regForm.name} onChange={e => setRegForm({...regForm, name: e.target.value})} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500"/>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button onClick={submitRegistration} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl">신청하기</button>
+                                    <button onClick={() => setRegModal(false)} className="flex-1 py-3 bg-gray-100 text-gray-500 font-bold rounded-xl">취소</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
 
             if (view === 'settings') return (
-                <div className="max-w-md mx-auto min-h-screen bg-gray-50 p-5 pb-24">
+                <div className="max-w-md mx-auto min-h-screen bg-gray-50 p-5 pb-24 relative">
                     <header className="flex justify-between items-center mb-8">
                         <button onClick={() => setView('main')} className="text-gray-400 font-bold">← 돌아가기</button>
                         <h2 className="text-2xl font-black">SETTINGS</h2>
                     </header>
 
-                    <button onClick={resetAllRecords} className="w-full py-4 bg-red-100 text-red-600 rounded-2xl font-bold mb-8 shadow-sm">
-                        🔥 모든 암송 기록 리셋
-                    </button>
-
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="font-bold text-lg text-gray-800">주제 및 구절 관리</h3>
-                        <button onClick={addCategory} className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-lg">+ 새 주제</button>
+                    <div className="mb-8 p-5 bg-white rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center">
+                        <div>
+                            <p className="text-xs text-gray-400 font-bold">접속 정보</p>
+                            <p className="font-black text-lg text-blue-600">{currentUserObj?.name} <span className="text-sm text-gray-400 font-normal">({currentUser})</span></p>
+                            <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded inline-block mt-1">{isAdmin ? 'Admin' : 'User'}</span>
+                        </div>
+                        <button onClick={handleLogout} className="text-sm font-bold text-gray-500 underline">로그아웃</button>
                     </div>
 
-                    <div className="space-y-4">
-                        {data.map((cat, cIdx) => (
-                            <div key={cIdx} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
-                                <div className="flex justify-between items-center mb-3 pb-3 border-b border-gray-50">
-                                    <h4 className="font-bold text-blue-600">{cat.category}</h4>
-                                    <div className="flex gap-2">
-                                        <button onClick={() => editCategory(cIdx)} className="px-2 py-1 bg-gray-100 text-gray-500 text-[10px] rounded">수정</button>
-                                        <button onClick={() => deleteCategory(cIdx)} className="px-2 py-1 bg-red-50 text-red-500 text-[10px] rounded">삭제</button>
-                                    </div>
+                    <button onClick={resetMyRecord} className="w-full py-4 bg-white text-red-500 rounded-2xl font-bold mb-8 shadow-sm border border-red-100">
+                        내 암송 기록 초기화
+                    </button>
+
+                    {isAdmin && (
+                        <div className="space-y-8 animate-in fade-in duration-300">
+                            <div className="pt-6 border-t-2 border-dashed border-gray-200">
+                                <h3 className="font-black text-xl text-blue-600 mb-4">👑 ADMIN 영역</h3>
+                                <button onClick={resetAllRecords} className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-bold mb-4">
+                                    🚨 전체 사용자 기록 리셋
+                                </button>
+                            </div>
+
+                            {/* 사용자 관리 */}
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="font-bold text-gray-800">사용자 관리</h4>
+                                    <button onClick={() => setAdminUserModal({ isNew: true, id: '', name: '', level: 'user' })} className="text-xs bg-gray-900 text-white px-3 py-1 rounded">+ 추가</button>
                                 </div>
                                 
-                                <div className="space-y-3 mb-3">
-                                    {cat.verses.map(v => (
-                                        <div key={v.id} className="flex justify-between items-start group border-b border-gray-50 pb-2">
-                                            <div className="pr-4">
-                                                <p className="text-xs font-bold text-gray-700">{v.ref}</p>
-                                                <p className="text-xs text-gray-500 line-clamp-1">"{v.text}"</p>
+                                {/* 승인 대기자 먼저 보여주기 */}
+                                {users.filter(u => u.status === 'pending').map(u => (
+                                    <div key={u.id} className="flex justify-between items-center p-3 bg-yellow-50 rounded-xl mb-2 border border-yellow-100">
+                                        <div>
+                                            <span className="font-bold text-sm">{u.name} <span className="text-xs text-gray-500">({u.id})</span></span>
+                                            <span className="text-[10px] ml-2 bg-yellow-400 text-white px-2 py-0.5 rounded">승인대기</span>
+                                        </div>
+                                        <div className="flex gap-1">
+                                            <button onClick={() => approveUser(u.id)} className="text-[10px] bg-green-500 text-white px-3 py-1 rounded font-bold">승인</button>
+                                            <button onClick={() => deleteUser(u.id)} className="text-[10px] bg-red-100 text-red-500 px-2 py-1 rounded">거절(삭제)</button>
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {/* 활성 사용자 */}
+                                {users.filter(u => u.status !== 'pending').map(u => (
+                                    <div key={u.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl mb-2">
+                                        <div>
+                                            <span className="font-bold text-sm">{u.name} <span className="text-xs text-gray-400">({u.id})</span></span>
+                                            <span className={`text-[10px] ml-2 px-2 py-0.5 rounded ${u.level === 'admin' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{u.level}</span>
+                                        </div>
+                                        <div className="flex gap-1">
+                                            <button onClick={() => setAdminUserModal({ isNew: false, ...u })} className="text-[10px] bg-gray-200 px-2 py-1 rounded">수정</button>
+                                            <button onClick={() => deleteUser(u.id)} className="text-[10px] bg-red-100 text-red-600 px-2 py-1 rounded">삭제</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* 주제/구절 관리 */}
+                            <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="font-bold text-gray-800">주제 및 구절 관리</h4>
+                                    <button onClick={addCategory} className="text-xs bg-blue-600 text-white px-3 py-1 rounded">+ 새 주제</button>
+                                </div>
+                                <div className="space-y-4">
+                                    {globalData.map((cat, cIdx) => (
+                                        <div key={cIdx} className="border border-gray-100 rounded-xl p-3">
+                                            <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-50">
+                                                <span className="font-bold text-sm text-blue-600">{cat.category}</span>
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => editCategory(cIdx)} className="text-[10px] text-gray-400">수정</button>
+                                                    <button onClick={() => deleteCategory(cIdx)} className="text-[10px] text-red-400">삭제</button>
+                                                </div>
                                             </div>
-                                            <div className="flex gap-1 shrink-0 pt-1">
-                                                <button onClick={() => editVerse(cIdx, v.id)} className="text-[10px] text-gray-400 underline">수정</button>
-                                                <button onClick={() => deleteVerse(cIdx, v.id)} className="text-[10px] text-red-400 underline">삭제</button>
+                                            <div className="space-y-2 mb-2">
+                                                {cat.verses.map(v => (
+                                                    <div key={v.id} className="flex justify-between text-xs">
+                                                        <span className="text-gray-500">{v.ref}</span>
+                                                        <div className="flex gap-1">
+                                                            <button onClick={() => editVerse(cIdx, v.id)} className="text-[10px] text-blue-400">수정</button>
+                                                            <button onClick={() => deleteVerse(cIdx, v.id)} className="text-[10px] text-red-400">삭제</button>
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
+                                            <button onClick={() => addVerse(cIdx)} className="w-full py-1 bg-gray-50 text-[10px] text-gray-400 rounded border border-dashed border-gray-200">
+                                                + 말씀 추가
+                                            </button>
                                         </div>
                                     ))}
                                 </div>
-                                <button onClick={() => addVerse(cIdx)} className="w-full py-2 bg-gray-50 text-gray-500 text-xs font-bold rounded-xl border border-dashed border-gray-300">
-                                    + 말씀 추가
-                                </button>
                             </div>
-                        ))}
+                        </div>
+                    )}
+
+                    {/* Admin 사용자 팝업 (생성/수정) */}
+                    {adminUserModal && (
+                        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                                <h3 className="text-xl font-black mb-6">{adminUserModal.isNew ? '사용자 추가' : '사용자 수정'}</h3>
+                                
+                                <div className="space-y-4 mb-8">
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">ID (수정불가)</label>
+                                        <input type="text" value={adminUserModal.id} disabled={!adminUserModal.isNew} 
+                                            onChange={e => setAdminUserModal({...adminUserModal, id: e.target.value.toLowerCase()})} 
+                                            maxLength={10} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none disabled:opacity-50"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">이름</label>
+                                        <input type="text" value={adminUserModal.name} 
+                                            onChange={e => setAdminUserModal({...adminUserModal, name: e.target.value})} 
+                                            className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">권한 레벨</label>
+                                        <select value={adminUserModal.level} 
+                                            onChange={e => setAdminUserModal({...adminUserModal, level: e.target.value})} 
+                                            className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500">
+                                            <option value="user">User</option>
+                                            <option value="admin">Admin</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button onClick={saveAdminUserModal} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl">저장</button>
+                                    <button onClick={() => setAdminUserModal(null)} className="flex-1 py-3 bg-gray-100 text-gray-500 font-bold rounded-xl">취소</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+
+            // 테스트 모달
+            const TestModal = () => (
+                <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
+                    <div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl">
+                        <h3 className="text-lg font-bold mb-4 text-center">테스트 방식 선택</h3>
+                        <div className="space-y-3">
+                            <button onClick={() => { setTestMode('text'); setView('test'); setIsTestModalOpen(false); }}
+                                className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold">말씀 암송</button>
+                            <button onClick={() => { setTestMode('ref'); setView('test'); setIsTestModalOpen(false); }}
+                                className="w-full py-3 bg-gray-100 text-gray-800 rounded-xl font-bold border">장절 맞추기</button>
+                            <button onClick={() => setIsTestModalOpen(false)} className="w-full py-2 text-gray-400 text-sm">취소</button>
+                        </div>
                     </div>
                 </div>
             );
@@ -188,23 +439,20 @@
                     <button onClick={() => { setView('main'); setRevealMap({}); }} className="mb-6 text-gray-400 font-medium">← 학습으로 돌아가기</button>
                     <header className="mb-8">
                         <span className="text-xs font-bold text-blue-500 uppercase tracking-widest">{testMode === 'text' ? 'Word Memory' : 'Reference Match'}</span>
-                        <h2 className="text-2xl font-black">[{data[currentIdx]?.category}]</h2>
+                        <h2 className="text-2xl font-black">[{globalData[currentIdx]?.category}]</h2>
                     </header>
                     
-                    {data[currentIdx]?.verses.map(v => (
-                        <div key={v.id} className="mb-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    {globalData[currentIdx]?.verses.map(v => (
+                        <div key={v.id} className="mb-10 animate-in fade-in duration-500">
                             <div className="p-6 bg-gray-50 rounded-2xl mb-4 border border-gray-100">
                                 {testMode === 'text' ? (
                                     <div className="text-center">
                                         <p className="text-blue-600 font-bold text-xl mb-4">{v.ref}</p>
-                                        
-                                        {/* 미리보기 힌트: 정답이 가려져 있을 때만 첫 두 단어를 보여줌 */}
                                         {!revealMap[v.id] && (
                                             <p className="text-gray-400 font-medium text-lg mb-2">
                                                 {v.text.split(' ').slice(0, 2).join(' ')} <span className="opacity-40 tracking-widest">...</span>
                                             </p>
                                         )}
-
                                         <div className={`transition-all duration-300 ${revealMap[v.id] ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
                                             <p className="text-gray-800 leading-relaxed text-lg italic">"{v.text}"</p>
                                         </div>
@@ -223,28 +471,35 @@
                                 </button>
                             </div>
                             <div className="flex gap-2">
-                                {['done', 'partial', 'none'].map(s => (
-                                    <button key={s} onClick={() => handleStatusChange(v.id, s)}
-                                        className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${v.status === s ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-gray-100 text-gray-400'}`}>
-                                        {s === 'done' ? '완성' : s === 'partial' ? '불완전' : '모름'}
-                                    </button>
-                                ))}
+                                {['done', 'partial', 'none'].map(s => {
+                                    const currStatus = getVerseStatus(v.id);
+                                    return (
+                                        <button key={s} onClick={() => handleStatusChange(v.id, s)}
+                                            className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${currStatus === s ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-gray-100 text-gray-400'}`}>
+                                            {s === 'done' ? '완성' : s === 'partial' ? '불완전' : '모름'}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
                     ))}
                 </div>
             );
 
+            // --- 메인 뷰 ---
             return (
                 <div className="max-w-md mx-auto p-5 pb-24">
-                    {isModalOpen && <TestModal />}
+                    {isTestModalOpen && <TestModal />}
                     
                     <header className="flex justify-between items-center mb-8">
-                        <h1 className="text-3xl font-black tracking-tighter italic">BIBLE.</h1>
+                        <div>
+                            <h1 className="text-3xl font-black tracking-tighter italic">BIBLE.</h1>
+                            <p className="text-xs font-bold text-gray-400 mt-1">Hello, <span className="text-blue-500">{currentUserObj?.name}</span></p>
+                        </div>
                         <button onClick={() => setView('settings')} className="text-2xl opacity-50 hover:opacity-100 transition-opacity">⚙️</button>
                     </header>
 
-                    {data.length > 0 ? (
+                    {globalData.length > 0 ? (
                         <>
                             <div className="mb-8">
                                 <p className="text-xs font-bold text-gray-400 mb-2 ml-1">SELECT CATEGORY</p>
@@ -253,7 +508,7 @@
                                     onChange={(e) => setCurrentIdx(Number(e.target.value))}
                                     className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl font-bold text-gray-700 shadow-sm focus:border-blue-500 outline-none transition-all"
                                 >
-                                    {data.map((cat, i) => (
+                                    {globalData.map((cat, i) => (
                                         <option key={i} value={i}>{cat.category}</option>
                                     ))}
                                 </select>
@@ -270,20 +525,23 @@
                             </div>
 
                             <div className="space-y-4">
-                                {data[currentIdx]?.verses.map(v => (
-                                    <div key={v.id} className="p-5 bg-white rounded-2xl border border-gray-100 shadow-sm transition-transform active:scale-[0.98]">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <span className="text-sm font-black text-blue-500">{v.ref}</span>
-                                            <div className={`w-2 h-2 rounded-full ${v.status === 'done' ? 'bg-green-400' : v.status === 'partial' ? 'bg-yellow-400' : 'bg-red-400'}`}></div>
+                                {globalData[currentIdx]?.verses.map(v => {
+                                    const currStatus = getVerseStatus(v.id);
+                                    return (
+                                        <div key={v.id} className="p-5 bg-white rounded-2xl border border-gray-100 shadow-sm transition-transform active:scale-[0.98]">
+                                            <div className="flex justify-between items-start mb-3">
+                                                <span className="text-sm font-black text-blue-500">{v.ref}</span>
+                                                <div className={`w-2 h-2 rounded-full ${currStatus === 'done' ? 'bg-green-400' : currStatus === 'partial' ? 'bg-yellow-400' : 'bg-red-400'}`}></div>
+                                            </div>
+                                            <p className="text-gray-700 leading-relaxed font-medium">"{v.text}"</p>
                                         </div>
-                                        <p className="text-gray-700 leading-relaxed font-medium">"{v.text}"</p>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
 
                             <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md px-5">
                                 <button 
-                                    onClick={() => setIsModalOpen(true)}
+                                    onClick={() => setIsTestModalOpen(true)}
                                     className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-lg shadow-xl hover:bg-black transition-all"
                                 >
                                     TEST NOW
@@ -293,7 +551,7 @@
                     ) : (
                         <div className="text-center py-20 text-gray-400">
                             <p>주제가 하나도 없어.</p>
-                            <p className="text-sm mt-2">설정에서 새 주제와 말씀을 추가해봐!</p>
+                            <p className="text-sm mt-2">관리자 설정에서 새 주제를 추가해봐!</p>
                         </div>
                     )}
                 </div>
