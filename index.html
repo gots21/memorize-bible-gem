@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>성경 암송 Pro v6.1 (Auto Admin)</title>
+    <title>성경 암송 Pro v6.3 (Direct DB Login)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./data.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;700;900&display=swap');
         body { font-family: 'Pretendard', sans-serif; }
@@ -23,7 +22,7 @@
         const { useState, useEffect, useMemo } = React;
         const { createClient } = supabase;
 
-        // ⚠️ 복사해온 URL과 anon key를 여기에 넣어!
+        // ⚠️ 네 Supabase URL과 API Key 입력
         const SUPABASE_URL = 'https://uxwxsryujlzrxpbolusd.supabase.co/rest/v1/';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV4d3hzcnl1amx6cnhwYm9sdXNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MDY1MzAsImV4cCI6MjA5MjQ4MjUzMH0.Fc1efM34jw4MhEjhlbfqFeO7X7xg4eMtDVO1U1qx5-Q';
         const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -33,6 +32,7 @@
             const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('bible_current_user') || null);
             const [globalData, setGlobalData] = useState([]);
             const [userRecords, setUserRecords] = useState({});
+            const [isDbReady, setIsDbReady] = useState(false);
             
             const [currentIdx, setCurrentIdx] = useState(() => Number(localStorage.getItem('last_category_idx')) || 0);
             const [view, setView] = useState('main'); 
@@ -45,34 +45,33 @@
             const [regForm, setRegForm] = useState({ id: '', name: '' });
             const [adminUserModal, setAdminUserModal] = useState(null);
 
-            // DB 데이터 로드
             const fetchAllData = async () => {
-                let { data: uData } = await client.from('users').select('*');
-                let { data: bData } = await client.from('bible_data').select('*').eq('id', 1).single();
-                const { data: rData } = await client.from('user_records').select('*');
+                const { data: uData, error: uError } = await client.from('users').select('*');
+                if (uError) {
+                    console.error("DB Error:", uError);
+                    alert("🚨 DB 연결 에러!\nURL이나 Key가 틀렸거나 RLS 설정 문제야.\n" + uError.message);
+                    return;
+                }
                 
-                // 💡 [핵심 추가] DB에 유저가 한 명도 없으면 gots21 자동 생성
-                if (!uData || uData.length === 0) {
+                let finalUsers = uData || [];
+                if (finalUsers.length === 0) {
                     await client.from('users').insert({ id: 'gots21', name: '최고관리자', level: 'admin', status: 'active' });
                     const { data: newUData } = await client.from('users').select('*');
-                    uData = newUData;
+                    finalUsers = newUData || [];
                 }
-                
-                if (uData) setUsers(uData);
-                
-                // DB에 말씀 데이터가 없으면 data.js에서 불러와서 세팅해줌
-                if (!bData && typeof initialBibleData !== 'undefined') {
-                    await client.from('bible_data').insert({ id: 1, content: initialBibleData });
-                    setGlobalData(initialBibleData);
-                } else if (bData) {
-                    setGlobalData(bData.content);
-                }
+                setUsers(finalUsers);
 
+                let { data: bData } = await client.from('bible_data').select('*').eq('id', 1).single();
+                if (bData) setGlobalData(bData.content);
+
+                const { data: rData } = await client.from('user_records').select('*');
                 if (rData) {
                     const map = {};
                     rData.forEach(r => map[r.user_id] = r.record_data);
                     setUserRecords(map);
                 }
+
+                setIsDbReady(true);
             };
 
             useEffect(() => { fetchAllData(); }, []);
@@ -85,12 +84,24 @@
             const currentUserObj = useMemo(() => users.find(u => u.id === currentUser), [currentUser, users]);
             const isAdmin = currentUserObj?.level === 'admin';
 
-            // 로그인 & 가입
-            const handleLogin = () => {
+            // 💡 [수정됨] 로그인 시 DB를 직접 조회해서 확인하는 로직
+            const handleLogin = async () => {
                 const id = loginInput.trim().toLowerCase();
-                const user = users.find(u => u.id === id);
-                if (!user) return alert("등록되지 않은 아이디야. 계정 생성을 눌러줘.");
-                if (user.status === 'pending') return alert("관리자의 승인을 기다리는 중이야!");
+                if (!id) return;
+
+                if (!isDbReady) return alert("DB 연결을 확인 중이야. 잠시만!");
+
+                // 화면에 띄워진 데이터 말고, DB에 직접 물어봄
+                const { data: user, error } = await client.from('users').select('*').eq('id', id).single();
+
+                if (error || !user) {
+                    return alert(`DB에 '${id}' 아이디가 없어. 계정 생성을 먼저 해줘!\n(상세: ${error?.message || 'Not Found'})`);
+                }
+
+                if (user.status === 'pending') {
+                    return alert("가입은 되어 있는데, 관리자(gots21) 승인을 기다리는 중이야!");
+                }
+
                 setCurrentUser(id);
                 setView('main');
             };
@@ -99,7 +110,10 @@
                 const id = regForm.id.trim().toLowerCase();
                 if (!/^[a-z0-9]{1,10}$/.test(id)) return alert("ID는 영소문자/숫자 10자 이내.");
                 if (!regForm.name.trim()) return alert("이름을 입력해줘.");
-                if (users.find(u => u.id === id)) return alert("이미 존재하는 ID야.");
+                
+                // 가입 전 DB 체크
+                const { data: exist } = await client.from('users').select('id').eq('id', id).single();
+                if (exist) return alert("이미 존재하는 ID야.");
                 
                 const { error } = await client.from('users').insert({ id, name: regForm.name.trim(), level: 'user', status: 'pending' });
                 if (!error) { 
@@ -117,10 +131,9 @@
                 setView('main');
             };
 
-            // 상태 업데이트 (DB 저장)
             const handleStatusChange = async (vId, status) => {
                 const newRecord = { ...(userRecords[currentUser] || {}), [vId]: status };
-                setUserRecords({ ...userRecords, [currentUser]: newRecord }); // 화면 즉시 업데이트
+                setUserRecords({ ...userRecords, [currentUser]: newRecord }); 
                 await client.from('user_records').upsert({ user_id: currentUser, record_data: newRecord });
             };
 
@@ -133,7 +146,6 @@
                 return Math.round((done / verses.length) * 100);
             }, [globalData, currentIdx, userRecords, currentUser]);
 
-            // 관리자 기능 (DB 연동)
             const resetAllRecords = async () => {
                 if(confirm("경고: 모든 사용자의 암송 기록을 날려버릴까?")) {
                     await client.from('user_records').delete().neq('user_id', '');
@@ -164,7 +176,8 @@
                 if (!cleanName) return alert("이름을 입력해.");
 
                 if (isNew) {
-                    if (users.find(u => u.id === cleanId)) return alert("이미 존재하는 ID야.");
+                    const { data: exist } = await client.from('users').select('id').eq('id', cleanId).single();
+                    if (exist) return alert("이미 존재하는 ID야.");
                     await client.from('users').insert({ id: cleanId, name: cleanName, level, status: 'active' });
                 } else {
                     if (cleanId === 'gots21' && level !== 'admin') return alert("창조주의 권한은 강등할 수 없어.");
@@ -242,8 +255,10 @@
                             <input type="text" value={loginInput} onChange={e => setLoginInput(e.target.value.toLowerCase())} placeholder="아이디 입력" maxLength={10} className="w-full mt-1 p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl font-bold focus:border-blue-500 outline-none" />
                         </div>
                         <div className="flex gap-2">
-                            <button onClick={handleLogin} className="flex-1 py-4 bg-gray-900 text-white rounded-2xl font-bold">로그인</button>
-                            <button onClick={() => setRegModal(true)} className="flex-1 py-4 bg-blue-100 text-blue-700 rounded-2xl font-bold">계정 생성</button>
+                            <button onClick={handleLogin} className={`flex-1 py-4 text-white rounded-2xl font-bold ${isDbReady ? 'bg-gray-900' : 'bg-gray-400 cursor-not-allowed'}`}>
+                                {isDbReady ? '로그인' : 'DB 연결중...'}
+                            </button>
+                            <button onClick={() => isDbReady ? setRegModal(true) : alert("DB 연결중이야!")} className="flex-1 py-4 bg-blue-100 text-blue-700 rounded-2xl font-bold">계정 생성</button>
                         </div>
                     </div>
 
