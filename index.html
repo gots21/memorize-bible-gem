@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>성경 암송 Pro v6.5 (Header UI)</title>
+    <title>성경 암송 Pro v6.6 (Admin User Manager)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -43,6 +43,7 @@
             const [loginInput, setLoginInput] = useState('');
             const [regModal, setRegModal] = useState(false);
             const [regForm, setRegForm] = useState({ id: '', name: '' });
+            const [adminUserModal, setAdminUserModal] = useState(null); // 관리자용 유저 모달
 
             const fetchAllData = async () => {
                 const { data: uData, error: uError } = await client.from('users').select('*');
@@ -78,7 +79,6 @@
             const currentUserObj = useMemo(() => users.find(u => u.id === currentUser), [currentUser, users]);
             const isAdmin = currentUserObj?.level === 'admin';
 
-            // 로그인 로직
             const handleLogin = async () => {
                 const id = loginInput.trim().toLowerCase();
                 if (!id || !isDbReady) return;
@@ -92,7 +92,6 @@
                 setView('main');
             };
 
-            // 가입 시 즉시 활성화(승인 불필요)
             const submitRegistration = async () => {
                 const id = regForm.id.trim().toLowerCase();
                 if (!/^[a-z0-9]{1,10}$/.test(id)) return alert("ID는 영소문자/숫자 10자 이내.");
@@ -130,21 +129,37 @@
                 return Math.round((done / verses.length) * 100);
             }, [globalData, currentIdx, userRecords, currentUser]);
 
-            // 내 기록 리셋 (DB 연동 수정)
             const resetMyRecord = async () => {
                 if(confirm("내 암송 기록을 초기화할까? (복구 불가)")) {
-                    // 1. 화면(상태) 즉시 초기화
                     const newRecords = { ...userRecords };
                     delete newRecords[currentUser];
                     setUserRecords(newRecords);
-                    
-                    // 2. DB 초기화
                     await client.from('user_records').delete().eq('user_id', currentUser);
                     alert("내 기록 초기화 완료!");
                 }
             };
 
-            // 관리자 - 사용자 관리
+            // --- 관리자 전용 기능 ---
+            const saveAdminUserModal = async () => {
+                const { isNew, id, name, level } = adminUserModal;
+                const cleanId = id.trim().toLowerCase();
+                const cleanName = name.trim();
+
+                if (!/^[a-z0-9]{1,10}$/.test(cleanId)) return alert("ID는 영소문자/숫자 10자 이내.");
+                if (!cleanName) return alert("이름을 입력해.");
+
+                if (isNew) {
+                    const { data: exist } = await client.from('users').select('id').eq('id', cleanId).single();
+                    if (exist) return alert("이미 존재하는 ID야.");
+                    await client.from('users').insert({ id: cleanId, name: cleanName, level, status: 'active' });
+                } else {
+                    if (cleanId === 'gots21' && level !== 'admin') return alert("창조주의 권한은 강등할 수 없어.");
+                    await client.from('users').update({ name: cleanName, level }).eq('id', cleanId);
+                }
+                setAdminUserModal(null);
+                fetchAllData();
+            };
+
             const deleteUser = async (targetId) => {
                 if(targetId === 'gots21') return alert("삭제 불가!");
                 if(targetId === currentUser) return alert("자기 자신 삭제 불가.");
@@ -154,7 +169,6 @@
                 }
             };
 
-            // 관리자 - 성경 데이터 관리
             const updateGlobalDataDB = async (newData) => {
                 setGlobalData(newData);
                 await client.from('bible_data').upsert({ id: 1, content: newData });
@@ -207,10 +221,10 @@
                 <div className="max-w-md mx-auto min-h-screen flex flex-col items-center justify-center p-5 bg-gray-50 relative">
                     <div className="w-full bg-white p-8 rounded-3xl shadow-lg border border-gray-100 text-center">
                         <h1 className="text-4xl font-black italic tracking-tighter text-blue-600 mb-2">BIBLE.</h1>
-                        <p className="text-gray-400 font-bold mb-8">Memorize System</p>
+                        <p className="text-gray-400 font-bold mb-8">Memorize System (Cloud)</p>
                         
                         <div className="text-left mb-6">
-                            <label className="text-xs font-bold text-gray-500 ml-1">USER ID (영소문자/숫자)</label>
+                            <label className="text-xs font-bold text-gray-500 ml-1">USER ID</label>
                             <input type="text" value={loginInput} onChange={e => setLoginInput(e.target.value.toLowerCase())} placeholder="아이디 입력" maxLength={10} className="w-full mt-1 p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl font-bold focus:border-blue-500 outline-none" />
                         </div>
                         <div className="flex gap-2">
@@ -227,7 +241,7 @@
                                 <h3 className="text-xl font-black mb-6 text-center text-blue-600">계정 생성</h3>
                                 <div className="space-y-4 mb-8">
                                     <input type="text" placeholder="ID (영소문자/숫자)" value={regForm.id} onChange={e => setRegForm({...regForm, id: e.target.value.toLowerCase()})} maxLength={10} className="w-full p-3 bg-gray-50 border-2 rounded-xl outline-none focus:border-blue-500"/>
-                                    <input type="text" placeholder="이름 (표시용)" value={regForm.name} onChange={e => setRegForm({...regForm, name: e.target.value})} className="w-full p-3 bg-gray-50 border-2 rounded-xl outline-none focus:border-blue-500"/>
+                                    <input type="text" placeholder="이름" value={regForm.name} onChange={e => setRegForm({...regForm, name: e.target.value})} className="w-full p-3 bg-gray-50 border-2 rounded-xl outline-none focus:border-blue-500"/>
                                 </div>
                                 <div className="flex gap-2">
                                     <button onClick={submitRegistration} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl">가입하기</button>
@@ -250,6 +264,7 @@
                         <div>
                             <p className="text-xs text-gray-400 font-bold">접속 정보</p>
                             <p className="font-black text-lg text-blue-600">{currentUserObj?.name} <span className="text-sm text-gray-400 font-normal">({currentUser})</span></p>
+                            <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded inline-block mt-1">{isAdmin ? 'Admin' : 'User'}</span>
                         </div>
                         <button onClick={handleLogout} className="text-sm font-bold text-gray-500 underline">로그아웃</button>
                     </div>
@@ -259,18 +274,27 @@
                     {isAdmin && (
                         <div className="space-y-8 animate-in fade-in duration-300">
                             <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-                                <h4 className="font-bold text-gray-800 mb-4">사용자 관리</h4>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="font-bold text-gray-800">사용자 관리</h4>
+                                    <button onClick={() => setAdminUserModal({ isNew: true, id: '', name: '', level: 'user' })} className="text-xs bg-gray-900 text-white px-3 py-1 rounded">+ 추가</button>
+                                </div>
                                 {users.map(u => (
                                     <div key={u.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl mb-2">
-                                        <span className="font-bold text-sm">{u.name} <span className="text-xs text-gray-400">({u.id})</span></span>
-                                        <button onClick={() => deleteUser(u.id)} className="text-[10px] bg-red-100 text-red-600 px-2 py-1 rounded">삭제</button>
+                                        <div>
+                                            <span className="font-bold text-sm">{u.name} <span className="text-xs text-gray-400">({u.id})</span></span>
+                                            <span className={`text-[10px] ml-2 px-2 py-0.5 rounded ${u.level === 'admin' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{u.level}</span>
+                                        </div>
+                                        <div className="flex gap-1">
+                                            <button onClick={() => setAdminUserModal({ isNew: false, ...u })} className="text-[10px] bg-gray-200 px-2 py-1 rounded">수정</button>
+                                            <button onClick={() => deleteUser(u.id)} className="text-[10px] bg-red-100 text-red-600 px-2 py-1 rounded">삭제</button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
 
                             <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
                                 <div className="flex justify-between items-center mb-4">
-                                    <h4 className="font-bold text-gray-800">주제 및 구절 관리 (Admin)</h4>
+                                    <h4 className="font-bold text-gray-800">주제 및 구절 관리</h4>
                                     <button onClick={addCategory} className="text-xs bg-blue-600 text-white px-3 py-1 rounded">+ 새 주제</button>
                                 </div>
                                 <div className="space-y-4">
@@ -302,10 +326,39 @@
                             </div>
                         </div>
                     )}
+
+                    {adminUserModal && (
+                        <div className="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl">
+                                <h3 className="text-xl font-black mb-6">{adminUserModal.isNew ? '사용자 추가' : '사용자 수정'}</h3>
+                                <div className="space-y-4 mb-8">
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">ID (수정불가)</label>
+                                        <input type="text" value={adminUserModal.id} disabled={!adminUserModal.isNew} onChange={e => setAdminUserModal({...adminUserModal, id: e.target.value.toLowerCase()})} maxLength={10} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none disabled:opacity-50"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">이름</label>
+                                        <input type="text" value={adminUserModal.name} onChange={e => setAdminUserModal({...adminUserModal, name: e.target.value})} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-gray-500">권한 레벨</label>
+                                        <select value={adminUserModal.level} onChange={e => setAdminUserModal({...adminUserModal, level: e.target.value})} className="w-full p-3 bg-gray-50 border-2 rounded-xl mt-1 outline-none focus:border-blue-500">
+                                            <option value="user">User</option>
+                                            <option value="admin">Admin</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={saveAdminUserModal} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl">저장</button>
+                                    <button onClick={() => setAdminUserModal(null)} className="flex-1 py-3 bg-gray-100 text-gray-500 font-bold rounded-xl">취소</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
 
-            // 테스트 뷰
+            // --- 나머지 UI (테스트, 메인) ---
             if (view === 'test') return (
                 <div className="max-w-md mx-auto min-h-screen bg-white p-5 pb-24">
                     <button onClick={() => { setView('main'); setRevealMap({}); }} className="mb-6 text-gray-400 font-medium">← 학습으로 돌아가기</button>
@@ -340,21 +393,17 @@
                                 </button>
                             </div>
                             <div className="flex gap-2">
-                                {['done', 'partial', 'none'].map(s => {
-                                    const currStatus = getVerseStatus(v.id);
-                                    return (
-                                        <button key={s} onClick={() => handleStatusChange(v.id, s)} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${currStatus === s ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-gray-100 text-gray-400'}`}>
-                                            {s === 'done' ? '완성' : s === 'partial' ? '불완전' : '모름'}
-                                        </button>
-                                    );
-                                })}
+                                {['done', 'partial', 'none'].map(s => (
+                                    <button key={s} onClick={() => handleStatusChange(v.id, s)} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${getVerseStatus(v.id) === s ? 'bg-blue-600 text-white shadow-lg scale-105' : 'bg-gray-100 text-gray-400'}`}>
+                                        {s === 'done' ? '완성' : s === 'partial' ? '불완전' : '모름'}
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     ))}
                 </div>
             );
 
-            // 메인 뷰
             return (
                 <div className="max-w-md mx-auto p-5 pb-24">
                     {isTestModalOpen && (
@@ -368,7 +417,6 @@
                         </div>
                     )}
                     
-                    {/* 💡 헤더 수정: 이름과 아이디 표시 */}
                     <header className="flex justify-between items-center mb-8">
                         <div>
                             <h1 className="text-3xl font-black tracking-tighter italic">BIBLE.</h1>
